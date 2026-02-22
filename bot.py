@@ -1,77 +1,92 @@
-import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
+import asyncio
+import secrets
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message
+from aiogram.filters import CommandStart
+from config import BOT_TOKEN, OWNER_ID, ADMINS
+from database import *
 
-TOKEN = os.getenv("BOT_TOKEN")
-
-# 👇 SIZNING TELEGRAM ID
-ADMIN_IDS = [7797502113]
+bot = Bot(BOT_TOKEN)
+dp = Dispatcher()
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+# ================= USERNAME CHECK =================
+def username_required(user):
+    if user.id in ADMINS:
+        return True
+    return bool(user.username)
 
-    keyboard = [
-        [InlineKeyboardButton("🔎 Inline Qidiruv", callback_data="inline")],
-        [
-            InlineKeyboardButton("📚 Manga", callback_data="manga"),
-            InlineKeyboardButton("🎬 Anime", callback_data="anime"),
-        ],
-    ]
 
-    # Faqat admin ko‘radigan tugma
-    if user_id in ADMIN_IDS:
-        keyboard.append(
-            [InlineKeyboardButton("⚙️ Boshqarish", callback_data="admin")]
+# ================= START HANDLER =================
+@dp.message(CommandStart(deep_link=True))
+async def start_with_token(message: Message, command):
+    user = message.from_user
+
+    if not username_required(user):
+        await message.answer(
+            f"Iltimos hurmatli {user.full_name},\n\n"
+            "Username o‘rnatganingizdan so‘ng botga /start bosing."
+        )
+        return
+
+    token = command.args
+    channel = get_channel_by_token(token)
+
+    if not channel:
+        await message.answer("Noto‘g‘ri yoki eskirgan havola.")
+        return
+
+    channel_id = channel[0]
+    channel_type = channel[2]
+    channel_value = channel[3]
+    required = channel[5]
+    current = channel[6]
+
+    # obuna tekshirish
+    if channel_type in ["username", "id"]:
+        try:
+            member = await bot.get_chat_member(channel_value, user.id)
+            if member.status not in ["member", "administrator", "creator"]:
+                await message.answer("Siz hali kanalga obuna bo‘lmagansiz.")
+                return
+        except:
+            await message.answer("Kanal tekshirishda xatolik.")
+            return
+
+    # obuna hisoblash
+    increase_count(channel_id)
+
+    await message.answer("✅ Obuna tasdiqlandi!")
+
+    # limit tugaganini tekshirish
+    if current + 1 >= required:
+        await bot.send_message(
+            OWNER_ID,
+            f"🎉 {channel[4]} limiti bajarildi!"
         )
 
-    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
-        "Ushbu bot orqali Anime va Mangalarni yuklab olishingiz mumkin! 🎬📚",
-        reply_markup=reply_markup,
-    )
+# ================= ODDIY START =================
+@dp.message(CommandStart())
+async def start_normal(message: Message):
+    user = message.from_user
 
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    user_id = query.from_user.id
-    await query.answer()
-
-    if query.data == "inline":
-        await query.edit_message_text(
-            "Inline qidiruv uchun:\n@UzManhwaBot manga Naruto"
+    if not username_required(user):
+        await message.answer(
+            f"Iltimos hurmatli {user.full_name},\n\n"
+            "Username o‘rnatganingizdan so‘ng botga /start bosing."
         )
+        return
 
-    elif query.data == "manga":
-        await query.edit_message_text("📚 Manga bo‘limi")
+    add_user(user.id, user.username, user.full_name)
 
-    elif query.data == "anime":
-        await query.edit_message_text("🎬 Anime bo‘limi")
-
-    elif query.data == "admin":
-        if user_id in ADMIN_IDS:
-            await query.edit_message_text("⚙️ Admin panelga xush kelibsiz!")
-        else:
-            await query.answer("Siz admin emassiz ❌", show_alert=True)
+    await message.answer("Bot ishlamoqda.")
 
 
-async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id in ADMIN_IDS:
-        await update.message.reply_text("⚙️ Admin panel")
-    else:
-        await update.message.reply_text("Siz admin emassiz ❌")
+# ================= RUN =================
+async def main():
+    await dp.start_polling(bot)
 
 
-app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("admin", admin_command))
-app.add_handler(CallbackQueryHandler(button_handler))
-
-app.run_polling()
+if __name__ == "__main__":
+    asyncio.run(main())
